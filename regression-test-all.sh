@@ -6,6 +6,8 @@ not(){ if eval "$@"; then return 1; else return 0; fi; }
 newlines(){ awk '{for(i=1; i<=NF;i++)print $i}' "$@"; }
 parse(){ gawk "BEGIN{print $@}" </dev/null; }
 
+[ "$CI" = true ] || export CI=false
+
 # generally useful Variables
 NL='
 '
@@ -49,8 +51,13 @@ done
 
 REAL_CORES=`(cpus 2>/dev/null || echo 1) | awk '{print 1*$1}'`
 [ "$REAL_CORES" -gt 0 ] || die "can't figure out how many cores this machine has"
-CORES=`expr $REAL_CORES - 1`
-MAKE_CORES=`expr $REAL_CORES - 1`
+if "$CI"; then
+    CORES=$REAL_CORES
+    MAKE_CORES=$REAL_CORES
+else
+    CORES=`expr $REAL_CORES - 1`
+    MAKE_CORES=`expr $REAL_CORES - 1`
+fi
 [ `hostname` = Jenkins ] && MAKE_CORES=2 # only use 2 cores to make on Jenkins
 echo "Using $MAKE_CORES cores to make and $CORES cores for regression tests"
 
@@ -100,7 +107,8 @@ for EXT in '' $EXECS; do
     fi
     #[ -x "$EXE" ] || die "Executable '$EXE' must exist or you must specify -make"
     # skip multi and float since they will be tested separately below
-    if [ "$ext" = .multi -o "$ext" = .float ] || ./sana$ext -itm 1 -s3 1 -g1 yeast -g2 human -tinitial 1 -tdecay 1 >/dev/null 2>&1; then
+    [ "$ext" = .multi -o "$ext" = .float ] && continue
+    if ./sana$ext -tolerance 0 -itm 1 -s3 1 -g1 yeast -g2 human -tinitial 1 -tdecay 1 >/dev/null 2>&1; then
 	WORKING_EXECS="${WORKING_EXECS}sana$ext$TAB"
     else
 	warn "executable sana$ext failed a trivial test"
@@ -110,6 +118,8 @@ done
 (( NUM_FAILS *= 1000 ))
 WORKING_EXECS=`echo "$WORKING_EXECS" | sed 's/	$//'` # delete trailing TAB
 export EXE SANA_DIR CORES REAL_CORES MAKE_CORES EXECS WORKING_EXECS
+
+echo WORKING EXECUTABLES: ${WORKING_EXECS:?"${NL}FATAL ERROR: cannot continue since there are no working pairwise executables!$NL(with the possible exception of float)"}
 
 STDBUF=''
 if which stdbuf >/dev/null; then

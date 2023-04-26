@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -x
 PARALLEL_EXE=${PARALLEL_EXE:?"PARALLEL_EXE must be set"}
 CORES=${CORES:?"CORES must be set"}
 PARALLEL_CMD="$PARALLEL_EXE -s bash $CORES"  # run in parallel on jenkins
@@ -79,7 +79,7 @@ export Networks_count=`echo $nets | wc -w`
 
 if $RUN; then
     [ -x "$EXE" ] || die "can't find executable '$EXE'"
-    EXECS=`echo "$WORKING_EXECS" | newlines | egrep -vi "MULTI|FLOAT" | tr A-Z a-z | fmt -999`
+    EXECS=`echo "$WORKING_EXECS" | newlines | tr A-Z a-z | fmt -999`
     echo sana executables: "$EXECS" >&2
     echo "$nets" | newlines | awk '{printf "count.el networks/%s.el\n",$0}' | sh | sed -e 's,networks/,,' -e 's/\.el$//' |
 	awk '{n[NR-1]=$1; m[NR-1]=$2; net[NR-1]=$NF}
@@ -89,11 +89,18 @@ if $RUN; then
 	    {net1[NR-1]=$2; net2[NR-1]=$3}
 	    END{run=totalRuns=NR;
 		for(i=0;i<NR;i++){ whichExec=1+int(--run/totalRuns*length(EXECS));
-		    printf "echo Running %s on %s-%s; ./%s -itm 300 -s3 1 -g1 %s -g2 %s -o '$OutputDir'/%s-%s > '$OutputDir'/%s-%s.progress 2>&1\n",EXECS[whichExec],net1[i],net2[i],EXECS[whichExec],net1[i],net2[i],net1[i],net2[i],net1[i],net2[i];
+		    printf "echo Running %s on %s-%s; ./%s -tolerance 0 -itm 300 -s3 1 -g1 %s -g2 %s -o '$OutputDir'/%s-%s > '$OutputDir'/%s-%s.progress 2>&1\n",EXECS[whichExec],net1[i],net2[i],EXECS[whichExec],net1[i],net2[i],net1[i],net2[i],net1[i],net2[i];
 	    }
-	}' | revlines | eval $PARALLEL_CMD
+	}' |
+	if [ "$CI" = true ]; then #continuous integration: run each EXEC on only the smallest pair of networks
+	    awk '!seen[$3]{print; seen[$3]=1}'
+	else
+	    cat
+	fi | revlines | eval $PARALLEL_CMD
     (( NUM_FAILS+=$? ))
 fi
+
+(( NUM_FAILS+=28-`ls $OutputDir/*.progress | wc -l` ))
 
 Iterations=""
 echo "Checking Iterations Speed" >> $OutputFile
@@ -149,7 +156,7 @@ if [ ! -z "$CompareFile" ]; then
         baseItem=`echo -e $BaseAverages | awk '{print $'$i'}'`
         newItem=`echo -e $NewAverages | awk '{print $'$i'}'`
         name=`echo -e $Names | awk '{print $'$i'}'`
-        errorDif=`parse "($newItem - $baseItem)/$baseItem"`
+        errorDif=`echo "($newItem - $baseItem)/$baseItem"|bc -l`
 	EXTRA_MARGIN=1
 	echo -n "$name: ($newItem - $baseItem)/$baseItem, changeFrac: $errorDif, margin $ErrorMargin" >&2
 	case $name in
@@ -159,8 +166,8 @@ if [ ! -z "$CompareFile" ]; then
 	    ;;
 	esac
 	echo "" # finish the "echo -n" line above
-	errorDif=`parse "$errorDif/$EXTRA_MARGIN"`
-        errorDif=`parse "ABS($errorDif)" | awk '{printf "%.16f\n",$1}'`
+	errorDif=`echo "$errorDif/$EXTRA_MARGIN"|bc -l`
+        errorDif=`echo "($errorDif)" | bc -l | awk 'function ABS(x){if(x<0)x=-x; return x} {printf "%.16f\n",ABS($1)}'`
         if echo nothing | awk "$errorDif > $ErrorMargin{exit 0}END{exit 1}"; then # remember in bash 0=true
             touch $OutputDir/failed
 	    echo "$name failed error margin: ($newItem - $baseItem)/$baseItem has error difference '$errorDif < $ErrorMargin'" >&2
